@@ -1,11 +1,24 @@
 import re
 from urllib.parse import urlparse
+from pathlib import Path
 
 from i2a.core import Action, WorkflowPlan
 from i2a.planner.parser import ParsedIntent
+from i2a.execution.application_discovery import ApplicationDiscovery
+
 
 class ActionPlanner:
     """Converts parsed instructions into structured action plans."""
+
+    def __init__(
+        self,
+        application_discovery: ApplicationDiscovery | None = None,
+    ) -> None:
+        self.application_discovery = (
+            application_discovery
+            if application_discovery is not None
+            else ApplicationDiscovery()
+        )
 
     def create_plan(self, intent: ParsedIntent) -> WorkflowPlan:
         text = intent.normalized_text
@@ -37,13 +50,12 @@ class ActionPlanner:
             url = match.group(1).rstrip(".,!?")
             parsed_url = urlparse(url)
 
-            if(
+            if (
                 parsed_url.scheme in ("http", "https")
                 and parsed_url.hostname
                 and not parsed_url.username
                 and not parsed_url.password
-            ) :
-                
+            ):
                 candidates.append(
                     (
                         match.start(),
@@ -80,26 +92,7 @@ class ActionPlanner:
                     )
                 )
 
-        app_pattern = (
-            r"\b(?:open|launch|start)\s+"
-            r"(?:application\s+)?"
-            r"(notepad|calculator|paint)"
-            r"(?=\s|$|[.,!?;])"
-        )
-
-        for match in re.finditer(
-            app_pattern, text, re.IGNORECASE
-        ):
-            application = match.group(1)
-
-            candidates.append(
-                (
-                    match.start(),
-                    "open_application",
-                    {"application": application},
-                    f"Open application {application}",
-                )
-            )
+        self._discover_application_actions(text, candidates)
 
         candidates.sort(key=lambda item: item[0])
 
@@ -116,3 +109,81 @@ class ActionPlanner:
             )
 
         return steps
+
+    def _extract_target_path(self, text: str) -> str | None:
+        """Extract an optional Windows folder or file path."""
+
+        match = re.search(
+            r"\b(?:at|in|inside)\s+"
+            r"([A-Za-z]:\\.+)",
+            text,
+            re.IGNORECASE,
+        )
+
+        if not match:
+            return None
+
+        return match.group(1).strip().rstrip(".,!?;")
+
+
+    def _discover_application_actions(
+        self,
+        text: str,
+        candidates: list,
+    ) -> None:
+        """Match application names against discovered applications."""
+
+        applications = self.application_discovery.discover()
+
+        # Check longer names first to avoid partial matches.
+        applications = sorted(
+            applications,
+            key=lambda application: len(application.name),
+            reverse=True,
+        )
+
+        command_pattern = (
+            r"\b(?:open|launch|start)\s+"
+            r"(?:application\s+)?"
+        )
+
+        for command in re.finditer(
+            command_pattern,
+            text,
+            re.IGNORECASE,
+        ):
+            remaining_text = text[command.end():]
+
+            for application in applications:
+                name = application.name.strip()
+
+                if not name:
+                    continue
+
+                pattern = (
+                    re.escape(name)
+                    + r"(?=$|[\s.,!?;])"
+                )
+
+                match = re.match(
+                    pattern,
+                    remaining_text,
+                    re.IGNORECASE,
+                )
+
+                if match:
+                    parameters = {"application": name}
+
+                    target_path = self._extract_target_path(text)
+
+                    if target_path:
+                        parameters["path"] = target_path
+
+                    candidates.append(
+                        (
+                            command.start(),
+                            "open_application",
+                            parameters,
+                            f"Open application {name}",
+                        )
+                    )

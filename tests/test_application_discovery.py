@@ -10,19 +10,8 @@ from i2a.execution.application_discovery import (
     "i2a.execution.application_discovery.shutil.which",
     return_value=r"C:\Windows\System32\notepad.exe",
 )
-@patch.object(
-    ApplicationDiscovery,
-    "_discover_start_menu",
-)
-@patch.object(
-    ApplicationDiscovery,
-    "_discover_registry",
-)
-def test_discover_application(
-    mock_registry,
-    mock_start_menu,
-    mock_which,
-):
+@patch.object(ApplicationDiscovery, "_discover_start_menu")
+def test_discover_application(mock_start_menu, mock_which):
     discovery = ApplicationDiscovery()
 
     applications = discovery.discover()
@@ -35,26 +24,14 @@ def test_discover_application(
 
     mock_which.assert_called()
     mock_start_menu.assert_called_once()
-    mock_registry.assert_called_once()
 
 
 @patch(
     "i2a.execution.application_discovery.shutil.which",
     return_value=None,
 )
-@patch.object(
-    ApplicationDiscovery,
-    "_discover_start_menu",
-)
-@patch.object(
-    ApplicationDiscovery,
-    "_discover_registry",
-)
-def test_discover_no_applications(
-    mock_registry,
-    mock_start_menu,
-    mock_which,
-):
+@patch.object(ApplicationDiscovery, "_discover_start_menu")
+def test_discover_no_applications(mock_start_menu, mock_which):
     discovery = ApplicationDiscovery()
 
     applications = discovery.discover()
@@ -62,7 +39,6 @@ def test_discover_no_applications(
     assert applications == []
 
     mock_start_menu.assert_called_once()
-    mock_registry.assert_called_once()
 
 
 @patch.object(

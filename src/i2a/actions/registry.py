@@ -95,8 +95,9 @@ def create_default_registry() -> ActionRegistry:
     registry.register(
         ActionDefinition(
             name="open_application",
-            description="Open an approved desktop application.",
+            description="Open an approved desktop application, optionally with a folder or file.",
             required_parameters=["application"],
+            optional_parameters=["path"],
         )
     )
 

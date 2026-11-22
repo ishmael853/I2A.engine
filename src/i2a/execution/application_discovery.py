@@ -1,7 +1,6 @@
+
 import os
 import shutil
-import sys
-import winreg
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -15,7 +14,7 @@ class DiscoveredApplication:
 
 
 class ApplicationDiscovery:
-    """Discovers applications from Windows Start Menu, registry, and PATH."""
+    """Discovers launchable applications from Start Menu and PATH."""
 
     START_MENU_LOCATIONS = [
         Path(os.environ.get("APPDATA", ""))
@@ -30,36 +29,43 @@ class ApplicationDiscovery:
         / "Programs",
     ]
 
-    REGISTRY_LOCATIONS = [
-        (
-            winreg.HKEY_LOCAL_MACHINE,
-            r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
-        ),
-        (
-            winreg.HKEY_CURRENT_USER,
-            r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
-        ),
-        (
-            winreg.HKEY_LOCAL_MACHINE,
-            r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall",
-        ),
-    ]
-
     BLOCKED_TERMS = (
         "uninstall",
         "installer",
         "redistributable",
         "runtime",
         "setup.exe",
+        "package cache",
+        "officeclicktorun",
+        "clicktorun",
     )
 
+    BLOCKED_PATH_TERMS = (
+        "\\package cache\\",
+        "\\installer\\",
+        "\\installers\\",
+        "\\redist\\",
+        "\\redistributable\\",
+        "\\runtime\\",
+    )
+
+    BLOCKED_EXECUTABLES = {
+        "uninstall.exe",
+        "unins000.exe",
+        "unins001.exe",
+        "msiexec.exe",
+        "wintoast.exe",
+        "setup.exe",
+        "installer.exe",
+        "pg_ctl.exe",
+    }
+
     def discover(self) -> list[DiscoveredApplication]:
-        """Discover applications from all supported Windows sources."""
+        """Discover applications with verified executable targets."""
 
         applications: dict[str, DiscoveredApplication] = {}
 
         self._discover_start_menu(applications)
-        self._discover_registry(applications)
         self._discover_path(applications)
 
         return sorted(
@@ -73,7 +79,7 @@ class ApplicationDiscovery:
         name: str,
         executable: str,
     ) -> None:
-        """Add a valid executable while avoiding duplicates."""
+        """Add a valid executable while avoiding duplicate paths."""
 
         if not isinstance(name, str) or not isinstance(executable, str):
             return
@@ -82,6 +88,12 @@ class ApplicationDiscovery:
         executable = executable.strip().strip('"')
 
         if not name or not executable:
+            return
+
+        if any(
+            term in name.lower()
+            for term in self.BLOCKED_TERMS
+        ):
             return
 
         path = Path(executable).expanduser()
@@ -93,10 +105,19 @@ class ApplicationDiscovery:
         ):
             return
 
-        key = os.path.normcase(str(path.resolve()))
+        if path.name.lower() in self.BLOCKED_EXECUTABLES:
+            return
+
+        normalized_path = os.path.normcase(str(path.resolve()))
+
+        if any(
+            term in normalized_path
+            for term in self.BLOCKED_PATH_TERMS
+        ):
+            return
 
         applications.setdefault(
-            key,
+            normalized_path,
             DiscoveredApplication(
                 name=name,
                 executable=str(path.resolve()),
@@ -111,10 +132,10 @@ class ApplicationDiscovery:
 
         try:
             from win32com.client import Dispatch
-        except ImportError:
-            return
 
-        shell = Dispatch("WScript.Shell")
+            shell = Dispatch("WScript.Shell")
+        except Exception:
+            return
 
         for location in self.START_MENU_LOCATIONS:
             if not location.is_dir():
@@ -122,84 +143,21 @@ class ApplicationDiscovery:
 
             for shortcut in location.rglob("*.lnk"):
                 try:
+                    name = shortcut.stem.strip()
                     shortcut_info = shell.CreateShortcut(str(shortcut))
                     target = shortcut_info.TargetPath
 
+                    if not target:
+                        continue
+
                     self._add_application(
                         applications,
-                        shortcut.stem,
+                        name,
                         target,
                     )
+
                 except Exception:
                     continue
-
-    def _discover_registry(
-        self,
-        applications: dict[str, DiscoveredApplication],
-    ) -> None:
-        """Discover launchable applications from Windows registry entries."""
-
-        if sys.platform != "win32":
-            return
-
-        for hive, registry_path in self.REGISTRY_LOCATIONS:
-            try:
-                with winreg.OpenKey(hive, registry_path) as root:
-                    subkey_count = winreg.QueryInfoKey(root)[0]
-
-                    for index in range(subkey_count):
-                        try:
-                            subkey_name = winreg.EnumKey(root, index)
-
-                            with winreg.OpenKey(
-                                root,
-                                subkey_name,
-                            ) as subkey:
-                                try:
-                                    name = winreg.QueryValueEx(
-                                        subkey,
-                                        "DisplayName",
-                                    )[0]
-                                except OSError:
-                                    continue
-
-                                try:
-                                    executable = winreg.QueryValueEx(
-                                        subkey,
-                                        "DisplayIcon",
-                                    )[0]
-                                except OSError:
-                                    continue
-
-                                executable = executable.split(",")[0]
-                                executable = executable.strip().strip('"')
-
-                                lower_name = str(name).lower()
-                                lower_executable = executable.lower()
-
-                                if (
-                                    any(
-                                        term in lower_name
-                                        for term in self.BLOCKED_TERMS
-                                    )
-                                    or any(
-                                        term in lower_executable
-                                        for term in self.BLOCKED_TERMS
-                                    )
-                                ):
-                                    continue
-
-                                self._add_application(
-                                    applications,
-                                    name,
-                                    executable,
-                                )
-
-                        except OSError:
-                            continue
-
-            except OSError:
-                continue
 
     def _discover_path(
         self,

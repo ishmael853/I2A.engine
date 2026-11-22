@@ -2,10 +2,12 @@ import subprocess
 import time
 import webbrowser
 from urllib.parse import urlparse
+from pathlib import Path
 
 from i2a.core import Action
 from i2a.execution.application_discovery import ApplicationDiscovery
 from i2a.execution.result import ActionResult
+
 
 
 class ActionExecutor:
@@ -113,26 +115,44 @@ class ActionExecutor:
         """Discover and launch an available application."""
 
         application = action.parameters.get("application")
+        target_path = action.parameters.get("path")
 
         if not isinstance(application, str):
             raise ValueError("Application name must be a string.")
 
         application = application.strip()
 
-        if not application:
-            raise ValueError("Application name cannot be empty.")
+        command = []
+
+        if target_path is not None:
+            if not isinstance(target_path, str):
+                raise ValueError("Target path must be a string.")
+
+            target_path = target_path.strip()
+
+            if not target_path:
+                raise ValueError("Target path cannot be empty.")
+
+            path = Path(target_path).expanduser()
+
+            if not path.exists():
+                raise ValueError(
+                    f"Target path does not exist: {target_path}"
+                )
+
+            command.append(str(path.resolve()))
 
         discovered = self.application_discovery.find(application)
 
         if discovered is None:
             raise ValueError(
-                f"Application '{application}' was not found "
+                f"Application '{application}' was not found"
                 "or is not approved."
             )
 
         process = subprocess.Popen(
-            [discovered.executable],
-            shell=False,
+            [discovered.executable, *command],
+            shell=False
         )
 
         return ActionResult(
