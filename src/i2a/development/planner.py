@@ -1,7 +1,9 @@
 
 import json
+from pathlib import Path
 
 from i2a.ai.assistant import I2AAssistant
+from i2a.development.workspace import WorkspaceAnalyzer
 
 
 class DevelopmentPlanner:
@@ -19,8 +21,12 @@ class DevelopmentPlanner:
     def __init__(
         self,
         assistant: I2AAssistant | None = None,
+        workspace_analyzer: WorkspaceAnalyzer | None = None,
     ) -> None:
         self.assistant = assistant or I2AAssistant()
+        self.workspace_analyzer = (
+            workspace_analyzer or WorkspaceAnalyzer()
+        )
 
     def _validate_plan(self, plan: dict) -> None:
         """Validate the structure of a development plan."""
@@ -33,10 +39,7 @@ class DevelopmentPlanner:
                 + ", ".join(sorted(missing_fields))
             )
 
-        for field in (
-            "project_name",
-            "description",
-        ):
+        for field in ("project_name", "description"):
             if not isinstance(plan[field], str) or not plan[field].strip():
                 raise ValueError(f"Invalid field: {field}")
 
@@ -63,18 +66,40 @@ class DevelopmentPlanner:
                     f"Development step {index} is incomplete."
                 )
 
-    def create_plan(self, instruction: str) -> dict:
-        """Generate a structured development plan using AI."""
+    def create_plan(
+        self,
+        instruction: str,
+        workspace_path: str | Path | None = None,
+    ) -> dict:
+        """Generate a development plan, optionally using workspace context."""
 
         if not isinstance(instruction, str) or not instruction.strip():
             raise ValueError(
                 "Development instruction cannot be empty."
             )
 
+        workspace_context = ""
+
+        if workspace_path is not None:
+            analysis = self.workspace_analyzer.analyze(workspace_path)
+
+            workspace_context = (
+                "\n\nEXISTING PROJECT WORKSPACE:\n"
+                + json.dumps(analysis.to_dict(), indent=2)
+            )
+
         prompt = f"""
 Create a software development plan for this request:
 
 {instruction.strip()}
+
+{workspace_context}
+
+If existing project information is provided:
+- Base your plan on the actual project structure.
+- Identify existing files and avoid unnecessary duplication.
+- Recommend changes that fit the existing technology stack.
+- Do not assume that files exist unless they appear in the analysis.
 
 Return ONLY valid JSON with ALL these fields:
 

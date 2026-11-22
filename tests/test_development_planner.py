@@ -27,9 +27,11 @@ class FakeAssistant:
     def __init__(self, responses):
         self.responses = iter(responses)
         self.calls = 0
+        self.last_prompt = None
 
     def ask(self, instruction):
         self.calls += 1
+        self.last_prompt = instruction
         return next(self.responses)
 
 
@@ -99,3 +101,40 @@ def test_rejects_incomplete_development_step():
         planner.create_plan("Build a calculator.")
 
     assert assistant.calls == 2
+
+
+def test_create_plan_with_workspace_context(tmp_path):
+    project = tmp_path / "sample_project"
+    project.mkdir()
+
+    (project / "main.py").write_text(
+        "print('hello')",
+        encoding="utf-8",
+    )
+
+    assistant = FakeAssistant([json.dumps(VALID_PLAN)])
+    planner = DevelopmentPlanner(assistant=assistant)
+
+    plan = planner.create_plan(
+        "Improve this Python project.",
+        workspace_path=project,
+    )
+
+    assert plan == VALID_PLAN
+    assert "EXISTING PROJECT WORKSPACE" in assistant.last_prompt
+    assert "main.py" in assistant.last_prompt
+
+
+def test_create_plan_rejects_invalid_workspace(tmp_path):
+    assistant = FakeAssistant([json.dumps(VALID_PLAN)])
+    planner = DevelopmentPlanner(assistant=assistant)
+
+    missing_workspace = tmp_path / "missing_project"
+
+    with pytest.raises(FileNotFoundError):
+        planner.create_plan(
+            "Improve this project.",
+            workspace_path=missing_workspace,
+        )
+
+    assert assistant.calls == 0
