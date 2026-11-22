@@ -1,14 +1,14 @@
-
 import pytest
 
 from i2a.planner import IntentParser
 from i2a.planner.planner import ActionPlanner
 from i2a.execution.application_discovery import (
+    ApplicationDiscovery,
     DiscoveredApplication,
 )
 
 
-class FakeApplicationDiscovery:
+class FakeApplicationDiscovery(ApplicationDiscovery):
     """Provides predictable applications for planner tests."""
 
     def discover(self):

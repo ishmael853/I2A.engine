@@ -1,4 +1,3 @@
-
 from unittest.mock import patch
 
 from i2a.core import Action
@@ -84,6 +83,7 @@ def test_unapproved_application():
     result = executor.execute(action)
 
     assert result.success is False
+    assert result.error is not None
     assert "not approved" in result.error.lower()
 
 
@@ -137,6 +137,7 @@ def test_open_application_not_found(mock_find):
     result = executor.execute(action)
 
     assert result.success is False
+    assert result.error is not None
     assert "not found" in result.error.lower()
 
     mock_find.assert_called_once_with("unknown_app")
