@@ -152,3 +152,143 @@ def test_rejects_missing_workspace(tmp_path):
 
     with pytest.raises(FileNotFoundError):
         executor.execute(approval, tmp_path / "missing")
+
+def test_creates_backup_before_modifying_file(tmp_path):
+    executor = FileChangeExecutor()
+
+    existing_file = tmp_path / "main.py"
+    existing_file.write_text(
+        "print('original')",
+        encoding="utf-8",
+    )
+
+    approval = create_approval([
+        FileChange(
+            operation="modify",
+            file_path="main.py",
+            content="print('updated')",
+            reason="Update the application.",
+        )
+    ])
+
+    executor.execute(approval, tmp_path)
+
+    backup_file = tmp_path / "main.py.i2a-backup"
+
+    assert backup_file.exists()
+    assert backup_file.read_text(encoding="utf-8") == "print('original')"
+    assert existing_file.read_text(encoding="utf-8") == "print('updated')"
+
+def test_rejects_existing_backup(tmp_path):
+    executor = FileChangeExecutor()
+
+    existing_file = tmp_path / "main.py"
+    existing_file.write_text("Original", encoding="utf-8")
+
+    backup_file = tmp_path / "main.py.i2a-backup"
+    backup_file.write_text("Existing backup", encoding="utf-8")
+
+    approval = create_approval([
+        FileChange(
+            operation="modify",
+            file_path="main.py",
+            content="Updated",
+            reason="Update the application.",
+        )
+    ])
+
+    with pytest.raises(FileExistsError):
+        executor.execute(approval, tmp_path)
+
+    assert existing_file.read_text(encoding="utf-8") == "Original"
+    assert backup_file.read_text(encoding="utf-8") == "Existing backup"
+
+def test_preserves_original_file_if_atomic_replace_failes(
+        tmp_path, monkeypatch
+):
+
+    import i2a.development.file_executor as executor_module
+
+    executor = FileChangeExecutor()
+
+    existing_file = tmp_path / "main.py"
+    existing_file.write_text("original", encoding="utf-8")
+
+    approval = create_approval([
+        FileChange(
+            operation="modify",
+            file_path="main.py",
+            content="updated",
+            reason="Update the application.",
+        )
+    ])
+
+    def failing_replace(source, destination):
+        raise OSError("simulated replacement failure")
+
+    monkeypatch.setattr(
+        executor_module.os,
+        "replace",
+        failing_replace,
+    )
+
+    result = executor.execute(approval, tmp_path)
+
+    assert result["results"][0]["status"] == "failed"
+    assert existing_file.read_text(encoding="utf-8") == "original"
+    assert (tmp_path / "main.py.i2a-backup").exists()
+    assert not list(tmp_path.glob("*.i2a-tmp"))
+
+def test_restores_file_from_backup(tmp_path):
+    executor = FileChangeExecutor()
+
+    existing_file = tmp_path / "main.py"
+    existing_file.write_text("Original", encoding="utf-8")
+
+    backup_file = executor._create_backup(existing_file)
+
+    existing_file.write_text("Updated", encoding="utf-8")
+
+    executor._restore_backup(existing_file, backup_file)
+
+    assert existing_file.read_text(encoding="utf-8") == "Original"
+    assert backup_file.exists()
+
+def test_rollback_previous_changes_when_later_change_falls(
+        tmp_path, monkeypatch
+):
+    executor = FileChangeExecutor()
+
+    existing_file = tmp_path / "main.py"
+    existing_file.write_text("Original", encoding="utf-8")
+
+    approval = create_approval([
+        FileChange(
+            operation="create",
+            file_path="new.py",
+            content="print('new')",
+            reason="Create another file.",
+        ),
+        FileChange(
+            operation="modify",
+            file_path="main.py",
+            content="Updated",
+            reason="Update the application.",
+        ),
+    ])
+
+    original_atomic_write = executor._atomic_write
+
+    def failing_atomic_write(target, content):
+        raise OSError("Simulated failure")
+
+    monkeypatch.setattr(
+        executor,
+        "_atomic_write",
+        failing_atomic_write,
+    )
+
+    result = executor.execute(approval, tmp_path)
+
+    assert existing_file.read_text(encoding="utf-8") == "Original"
+    assert not (tmp_path / "new.py").exists()

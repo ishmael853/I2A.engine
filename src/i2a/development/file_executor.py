@@ -1,4 +1,6 @@
-
+import os
+import shutil
+import tempfile
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from i2a.development.approval import ProposalApproval
@@ -60,6 +62,106 @@ class FileChangeExecutor:
 
         return resolved
 
+    def _create_backup(self, target: Path) -> Path:
+        """Create a backup of an existing file."""
+
+        backup_path = target.with_name(
+            f"{target.name}.i2a-backup"
+        )
+
+        if backup_path.exists():
+            raise FileExistsError(
+                f"Backup already exists: {backup_path}"
+            )
+
+        shutil.copy2(target, backup_path)
+
+        return backup_path
+
+    # TRANSACTION STYLE ROLLBACK
+    # restore modified files from their backups
+    # remove files created by the failed transaction
+    # report which operations were rolled back 
+    # preserve backups for recovery
+
+    def _restore_backup(self, target: Path, backup: Path) -> None:
+        """Restore a file from its backup."""
+
+        temporary_path = None
+
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="wb",
+                dir=target.parent,
+                prefix=f".{target.name}",
+                suffix=".i2a-restore",
+                delete=False,
+            ) as temporary_file:
+                temporary_path = Path(temporary_file.name)
+
+                with backup.open("rb") as backup_files:
+                    shutil.copyfileobj(backup_files, temporary_file)
+
+                temporary_file.flush()
+                os.fsync(temporary_file.fileno())
+
+            shutil.copystat(backup, temporary_path)
+            os.replace(temporary_path, target)
+
+        finally:
+            if temporary_path is not None and temporary_path.exists():
+                temporary_path.unlink()
+
+    def _rollback_operations(self, completed_operations: list) -> list:
+        """Reverse previously completed file operations."""
+
+        errors = []
+
+        for change, target, backup_path in reversed(
+            completed_operations
+        ):
+            try:
+                if change.operation == "create":
+                    if target.exists():
+                        target.unlink()
+
+                elif backup_path is not None and backup_path.exists():
+                    self._restore_backup(target, backup_path)
+
+            except OSError as error:
+                errors.append({
+                    "file_path": change.file_path,
+                    "error": str(error),
+                })
+
+        return errors
+
+    def _atomic_write(self, target: Path, content: str) -> None:
+        """Write content safely using a temporary file."""
+
+        temporary_path = None
+
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                newline="",
+                dir=target.parent,
+                prefix=f".{target.name}.",
+                suffix=".i2a-tmp",
+                delete=False
+            ) as temporary_file:
+                temporary_path = Path(temporary_file.name)
+                temporary_file.write(content)
+                temporary_file.flush()
+                os.fsync(temporary_file.fileno())
+
+            os.replace(temporary_path, target)
+
+        finally:
+            if temporary_path is not None and temporary_path.exists():
+                temporary_path.unlink()
+
     def execute(
         self,
         approval: ProposalApproval,
@@ -117,11 +219,23 @@ class FileChangeExecutor:
                         f"File to modify does not exist: {target}"
                     )
 
+                backup_path = target.with_name(
+                    f"{target.name}.i2a-backup"
+                )
+
+                if backup_path.exists():
+                    raise FileExistsError(
+                        f"Backup already exists: {backup_path}"
+                    )
+
             operations.append((change, target))
 
         results = []
+        completed_operations = []
 
         for change, target in operations:
+            backup_path = None
+
             try:
                 if change.operation == "create":
                     with target.open(
@@ -132,10 +246,12 @@ class FileChangeExecutor:
                         file.write(change.content)
 
                 else:
-                    target.write_text(
-                        change.content,
-                        encoding="utf-8",
-                    )
+                    backup_path = self._create_backup(target)
+                    self._atomic_write(target, change.content)
+
+                completed_operations.append(
+                    (change, target, backup_path)
+                )
 
                 results.append({
                     "file_path": change.file_path,
@@ -144,12 +260,30 @@ class FileChangeExecutor:
                 })
 
             except OSError as error:
+                rollback_errors = self._rollback_operations(
+                    completed_operations
+                )
+
+                for result in results:
+                    if result["status"] == "success":
+                        result["status"] = "rolled_back"
+
                 results.append({
                     "file_path": change.file_path,
                     "operation": change.operation,
                     "status": "failed",
                     "error": str(error),
                 })
+
+                for rollback_error in rollback_errors:
+                    results.append({
+                        "file_path": rollback_error["file_path"],
+                        "operation": "rollback",
+                        "status": "rollback_failed",
+                        "error": rollback_error["error"],
+                    })
+
+                break
 
         return {
             "project_name": approval.proposal.project_name,
