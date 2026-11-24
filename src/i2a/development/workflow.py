@@ -44,6 +44,7 @@ class DevelopmentWorkflow:
         self.pending_approval: ProposalApproval | None = None
         self.workspace_path: Path | None = None
         self.preview: dict | None = None
+        self.execution_completed = False
 
     def prepare(
             self,
@@ -72,6 +73,7 @@ class DevelopmentWorkflow:
         self.pending_approval = None
         self.workspace_path = None
         self.preview = None
+        self.execution_completed = False
 
         plan = self.planner.create_plan(
             instruction,
@@ -124,12 +126,78 @@ class DevelopmentWorkflow:
 
         return self.pending_approval.to_dict()
 
+    def _verify_preview(self) -> None:
+        """Ensure workspace files have not changed since preview."""
+
+        if self.preview is None or self.workspace_path is None:
+            raise RuntimeError(
+                "No valid preview available."
+            )
+
+        preview_changes = self.preview.get("changes", [])
+
+        if len(preview_changes) != len(
+            self.pending_approval.proposal.changes
+        ):
+            raise RuntimeError(
+                "Preview does not match the development proposal."
+            )
+
+        for change, preview_change in zip(
+            self.pending_approval.proposal.changes,
+            preview_changes,
+        ):
+
+            if (
+                preview_change.get("operation") != change.operation
+                or preview_change.get("file_path") != change.file_path
+            ):
+                raise RuntimeError(
+                    "Preview does not match the development proposal."
+                )
+            
+            target = self.executor._resolve_target(
+                self.workspace_path,
+                change.file_path,
+            )
+
+            if change.operation == "create":
+                if target.exists():
+                    raise RuntimeError(
+                        f"Workspace changed after preview: "
+                        f"{change.file_path} already exists."
+                    )
+                
+
+            elif change.operation == "modify":
+                if not target.is_file():
+                    raise RuntimeError(
+                        f"Workspace changed after preview: "
+                        f"{change.file_path} is missing."
+                    )
+
+                current_content = target.read_text(
+                    encoding="utf-8"
+                )
+
+                if current_content != preview_change["current_content"]:
+                    raise RuntimeError(
+                        f"Workspace changed after preview: "
+                        f"{change.file_path} was modified."
+                    )
+
+    
     def execute(self) ->  dict:
         """Execute the approved development proposal."""
 
         if self.pending_approval is None:
             raise RuntimeError(
                 "There is no development proposal to execute."
+            )
+
+        if self.execution_completed:
+            raise RuntimeError(
+                "The development proposal has already been executed."
             )
 
         if self.pending_approval.status != ProposalApproval.APPROVED:
@@ -142,10 +210,14 @@ class DevelopmentWorkflow:
                 "No workspace is associated with the proposal."
             )
 
+        self._verify_preview()
+
         result = self.executor.execute(
             self.pending_approval,
             self.workspace_path,
         )
+
+        self.execution_completed = True
 
         return {
             "approval_status": self.pending_approval.status,

@@ -41,14 +41,33 @@ class FakePreviewer:
         self.received_proposal = proposal
         self.received_workspace = workspace_path
 
+        changes = []
+
+        for change in proposal.changes:
+            target = Path(workspace_path) / change.file_path
+
+            current_content = (
+                target.read_text(encoding="utf-8")
+                if change.operation == "modify" and target.is_file()
+                else None
+            )
+
+            changes.append({
+                "operation": change.operation,
+                "file_path": change.file_path,
+                "reason": change.reason,
+                "current_content": current_content,
+                "proposed_content": change.content,
+                "diff": "",
+            })
+
         return {
             "project_name": proposal.project_name,
             "summary": proposal.summary,
             "workspace": str(workspace_path),
             "total_changes": len(proposal.changes),
-            "changes": [],
+            "changes": changes,
         }
-
 
 class FakeExecutor:
     def __init__(self) -> None:
@@ -60,17 +79,24 @@ class FakeExecutor:
         self.received_workspace = workspace_path
 
         return {
-            "project_name": approval.proposal.project_name,
-            "workspace": str(workspace_path),
             "results": [
                 {
-                    "file_path": "src/main.py",
-                    "operation": "create",
                     "status": "success",
+                    "file_path": "src/main.py",
                 }
-            ],
+            ]
         }
 
+    def _resolve_target(self, workspace_path, file_path):
+        workspace = Path(workspace_path).resolve()
+        target = (workspace / file_path).resolve()
+
+        try:
+            target.relative_to(workspace)
+        except ValueError:
+            raise ValueError("File path escapes workspace.")
+
+        return target
 
 @pytest.fixture
 def workspace(tmp_path):
@@ -294,3 +320,62 @@ def test_execute_requires_proposal(
 
     with pytest.raises(RuntimeError):
         workflow.execute()
+
+def test_execute_cannot_run_same_approved_proposal_twice(
+        workspace,
+        plan,
+        proposal,
+):
+    workflow, _, _, _, executor = create_workflow(plan, proposal)
+
+    workflow.prepare(
+        "Build the demo application.",
+        workspace,
+    )
+
+    workflow.approve()
+
+    workflow.execute()
+
+    with pytest.raises(RuntimeError):
+        workflow.execute()
+
+    assert executor.received_approval is workflow.pending_approval
+
+def test_execute_rejects_workspace_changes_after_preview(
+    workspace,
+    plan,
+    proposal,
+):
+    target = workspace / "src" / "main.py"
+    target.parent.mkdir()
+
+    target.write_text(
+        "print('Original')\n",
+        encoding="utf-8",
+    )
+
+    proposal.changes[0].operation = "modify"
+    proposal.changes[0].content = "print('Updated')\n"
+
+    workflow, _, _, _, executor = create_workflow(plan, proposal)
+
+    workflow.prepare(
+        "Update the demo application.",
+        workspace,
+    )
+
+    target.write_text(
+        "print('Changed outside I2A')\n",
+        encoding="utf-8",
+    )
+
+    workflow.approve()
+
+    with pytest.raises(RuntimeError):
+        workflow.execute()
+
+    assert executor.received_approval is None
+    assert target.read_text(encoding="utf-8") == (
+        "print('Changed outside I2A')\n"
+    )
