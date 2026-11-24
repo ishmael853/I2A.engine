@@ -391,3 +391,30 @@ def test_reports_rollback_failure(
     assert result["results"][0]["status"] == "rollback_failed"
     assert result["results"][1]["status"] == "failed"
     assert (tmp_path / "new.py").exists()
+
+
+def test_reports_missing_backup_during_rollback(tmp_path):
+    executor = FileChangeExecutor()
+
+    target = tmp_path / "main.py"
+    target.write_text("Updated", encoding="utf-8")
+
+    missing_backup = tmp_path / ".i2a-backup" / "main.py"
+
+    errors = executor._rollback_operations([
+        (
+            FileChange(
+                operation="modify",
+                file_path="main.py",
+                content="Original",
+                reason="Restore original content.",
+            ),
+            target,
+            missing_backup,
+        )
+    ])
+
+    assert len(errors) == 1
+    assert errors[0]["file_path"] == "main.py"
+    assert "Backup file is missing" in errors[0]["error"]
+    assert target.read_text(encoding="utf-8") == "Updated"

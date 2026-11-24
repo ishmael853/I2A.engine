@@ -125,7 +125,12 @@ class FileChangeExecutor:
                     if target.exists():
                         target.unlink()
 
-                elif backup_path is not None and backup_path.exists():
+                elif backup_path is not None:
+                    if not backup_path.exists():
+                        raise FileNotFoundError(
+                            f"Backup file is missing: {backup_path}"
+                        )
+
                     self._restore_backup(target, backup_path)
 
             except OSError as error:
