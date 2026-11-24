@@ -235,14 +235,18 @@ class FileChangeExecutor:
 
         for change, target in operations:
             backup_path = None
+            created_target = False
 
             try:
                 if change.operation == "create":
-                    with target.open(
+                    file = target.open(
                         "x",
                         encoding="utf-8",
                         newline="",
-                    ) as file:
+                    )
+                    created_target = True
+
+                    with file:
                         file.write(change.content)
 
                 else:
@@ -260,8 +264,20 @@ class FileChangeExecutor:
                 })
 
             except OSError as error:
-                rollback_errors = self._rollback_operations(
-                    completed_operations
+
+                rollback_errors = []
+
+                if created_target and target.exists():
+                    try:
+                        target.unlink()
+                    except OSError as cleanup_error:
+                        rollback_errors.append({
+                            "file_path": change.file_path,
+                            "error": str(cleanup_error),
+                        })
+
+                rollback_errors.extend(
+                    self._rollback_operations(completed_operations)
                 )
 
                 for result in results:

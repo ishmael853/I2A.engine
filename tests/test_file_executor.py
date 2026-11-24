@@ -292,3 +292,53 @@ def test_rollback_previous_changes_when_later_change_falls(
 
     assert existing_file.read_text(encoding="utf-8") == "Original"
     assert not (tmp_path / "new.py").exists()
+
+    
+def test_removes_partially_created_file_when_write_failes(
+        tmp_path, monkeypatch
+):
+    from pathlib import Path
+
+    executor = FileChangeExecutor()
+
+    approval = create_approval([
+        FileChange(
+            operation="create",
+            file_path="main.py",
+            content="print('Hello Kenya')",
+            reason="Create the entry point.",
+        )
+    ])
+
+    created_file = tmp_path / "main.py"
+    original_open = Path.open
+
+    class FailingWriter:
+        def __init__(self, file):
+            self.file = file
+
+        def __enter__(self):
+            self.file.__enter__()
+            return self
+
+        def __exit__(self, *args):
+            return self.file.__exit__(*args)
+
+        def write(self, content):
+            self.file.write(content[:5])
+            raise OSError("Simulated partial write failure.")
+
+    def failing_open(path, mode="r", *args, **kwargs):
+        file = original_open(path, mode, *args, **kwargs)
+
+        if path == created_file and mode == "x":
+            return FailingWriter(file)
+
+        return file
+    
+    monkeypatch.setattr(Path, "open", failing_open)
+
+    result = executor.execute(approval, tmp_path)
+
+    assert result["results"][0]["status"] == "failed"
+    assert not created_file.exists()
