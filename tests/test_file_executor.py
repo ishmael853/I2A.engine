@@ -1,4 +1,3 @@
-
 import pytest
 
 from i2a.development.approval import ProposalApproval
@@ -254,6 +253,26 @@ def test_restores_file_from_backup(tmp_path):
 
     assert existing_file.read_text(encoding="utf-8") == "Original"
     assert backup_file.exists()
+
+def test_rejects_corrupted_backup(tmp_path):
+    executor = FileChangeExecutor()
+
+    existing_file = tmp_path / "main.py"
+    existing_file.write_text("Original", encoding="utf-8")
+
+    backup_file = executor._create_backup(existing_file)
+
+    existing_file.write_text("Updated", encoding="utf-8")
+
+    backup_file.write_text(
+        "Corrupted backup",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(OSError, match="integrity verification failed"):
+        executor._restore_backup(existing_file, backup_file)
+
+    assert existing_file.read_text(encoding="utf-8") == "Updated"
 
 def test_rollback_previous_changes_when_later_change_falls(
         tmp_path, monkeypatch

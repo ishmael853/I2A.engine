@@ -1,3 +1,4 @@
+import hashlib
 import os
 import shutil
 import tempfile
@@ -62,19 +63,86 @@ class FileChangeExecutor:
 
         return resolved
 
+    def _calculate_checksum(self, file_path: Path) -> str:
+        """Calculate the SHA-256 checksum of a file."""
+
+        checksum = hashlib.sha256()
+
+        with file_path.open("rb") as file:
+            for chunk in iter(
+                lambda: file.read(65536),
+                b"",
+            ):
+                checksum.update(chunk)
+
+        return checksum.hexdigest()
+
+
+    def _checksum_path(self, backup_path: Path) -> Path:
+        """Return the path used to store a backup checksum."""
+
+        return backup_path.with_name(
+            f"{backup_path.name}.sha256"
+        )
+
+    def _verify_backup(self, backup_path: Path) -> None:
+        """Verify a backup against its stored SHA-256 checksum."""
+
+        checksum_path = self._checksum_path(backup_path)
+
+        if not backup_path.is_file():
+            raise FileNotFoundError(
+                f"Backup file is missing: {backup_path}"
+            )
+
+        if not checksum_path.is_file():
+            raise FileNotFoundError(
+                f"Backup checksum is missing: {checksum_path}"
+            )
+
+        expected_checksum = checksum_path.read_text(
+            encoding="utf-8"
+        ).strip()
+
+        actual_checksum = self._calculate_checksum(backup_path)
+
+        if actual_checksum != expected_checksum:
+            raise OSError(
+                f"Backup integrity verification failed: {backup_path}"
+            )
+
+
     def _create_backup(self, target: Path) -> Path:
-        """Create a backup of an existing file."""
+        """Create a backup and store its SHA-256 checksum."""
 
         backup_path = target.with_name(
             f"{target.name}.i2a-backup"
         )
+
+        checksum_path = self._checksum_path(backup_path)
 
         if backup_path.exists():
             raise FileExistsError(
                 f"Backup already exists: {backup_path}"
             )
 
+        if checksum_path.exists():
+            raise FileExistsError(
+                f"Backup checksum already exists: {checksum_path}"
+            )
+
         shutil.copy2(target, backup_path)
+
+        try:
+            checksum = self._calculate_checksum(backup_path)
+            checksum_path.write_text(
+                checksum,
+                encoding="utf-8",
+            )
+        except OSError:
+            backup_path.unlink(missing_ok=True)
+            checksum_path.unlink(missing_ok=True)
+            raise
 
         return backup_path
 
@@ -86,6 +154,8 @@ class FileChangeExecutor:
 
     def _restore_backup(self, target: Path, backup: Path) -> None:
         """Restore a file from its backup."""
+
+        self._verify_backup(backup)
 
         temporary_path = None
 
