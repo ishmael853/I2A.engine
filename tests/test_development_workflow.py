@@ -70,13 +70,17 @@ class FakePreviewer:
         }
 
 class FakeExecutor:
-    def __init__(self) -> None:
+    def __init__(self, result=None) -> None:
         self.received_approval = None
         self.received_workspace = None
+        self.result = result
 
     def execute(self, approval, workspace_path):
         self.received_approval = approval
         self.received_workspace = workspace_path
+
+        if self.result is not None:
+            return self.result
 
         return {
             "results": [
@@ -137,11 +141,11 @@ def proposal():
     )
 
 
-def create_workflow(plan, proposal):
+def create_workflow(plan, proposal, executor=None):
     planner = FakePlanner(plan)
     generator = FakeProposalGenerator(proposal)
     previewer = FakePreviewer()
-    executor = FakeExecutor()
+    executor = executor or FakeExecutor()
 
     workflow = DevelopmentWorkflow(
         planner=planner,
@@ -379,3 +383,79 @@ def test_execute_rejects_workspace_changes_after_preview(
     assert target.read_text(encoding="utf-8") == (
         "print('Changed outside I2A')\n"
     )
+
+def test_execute_does_not_mark_failed_execution_as_completed(
+        workspace,
+        plan,
+        proposal,
+):
+    executor = FakeExecutor(
+        result={
+            "results": [
+                {
+                    "file_path": "src/main.py",
+                    "operation": "create",
+                    "status": "failed",
+                    "error": "simulated execution failure.",
+                }
+            ]
+        }
+    )
+
+    workflow, _, _, _, _ = create_workflow(
+        plan,
+        proposal,
+        executor=executor,
+    )
+
+    workflow.prepare(
+        "Build the demo application.",
+        workspace,
+    )
+
+    workflow.approve()
+
+    result = workflow.execute()
+
+    assert result["execution"]["results"][0]["status"] == "failed"
+    assert workflow.execution_completed is False
+
+def test_execute_does_not_mark_rolled_back_execution_as_completed(
+        workspace,
+        plan,
+        proposal,
+):
+    executor = FakeExecutor(
+        result={
+            "results": [
+                {
+                    "file_path": "src/main.py",
+                    "operation": "create",
+                    "status": "rolled_back",
+                },
+                {
+                    "file_path": "src/main.py",
+                    "operation": "create",
+                    "status": "rollback_failed",
+                },
+            ]
+        }
+    )
+
+    workflow, _, _, _, _ = create_workflow(
+        plan,
+        proposal,
+        executor=executor,
+    )
+
+    workflow.prepare(
+        "Build the demo application.",
+        workspace,
+    )
+
+    workflow.approve()
+
+    result = workflow.execute()
+
+    assert len(result["execution"]["results"]) == 2
+    assert workflow.execution_completed is False

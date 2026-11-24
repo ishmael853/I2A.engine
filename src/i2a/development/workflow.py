@@ -217,7 +217,15 @@ class DevelopmentWorkflow:
             self.workspace_path,
         )
 
-        self.execution_completed = True
+        statuses = [
+            item.get("status")
+            for item in result.get("results", [])
+        ]
+
+        self.execution_completed = (
+            bool(statuses)
+            and all(status == "success" for status in statuses)
+        )
 
         return {
             "approval_status": self.pending_approval.status,
