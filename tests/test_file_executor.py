@@ -7,6 +7,7 @@ from i2a.development.proposal import (
     DevelopmentProposal,
     FileChange,
 )
+from pathlib import Path
 
 
 def create_approval(changes):
@@ -293,7 +294,10 @@ def test_rollback_previous_changes_when_later_change_falls(
     assert existing_file.read_text(encoding="utf-8") == "Original"
     assert not (tmp_path / "new.py").exists()
 
-    
+    assert result["results"][0]["status"] == "rolled_back"
+    assert result["results"][1]["status"] == "failed"
+
+
 def test_removes_partially_created_file_when_write_failes(
         tmp_path, monkeypatch
 ):
@@ -342,3 +346,48 @@ def test_removes_partially_created_file_when_write_failes(
 
     assert result["results"][0]["status"] == "failed"
     assert not created_file.exists()
+
+def test_reports_rollback_failure(
+        tmp_path, monkeypatch
+):
+    executor = FileChangeExecutor()
+
+    approval = create_approval([
+        FileChange(
+            operation="create",
+            file_path="new.py",
+            content="print('new')",
+            reason="Create a file.",
+        ),
+        FileChange(
+            operation="create",
+            file_path="second.py",
+            content="print('second')",
+            reason="Create another file",
+        ),
+    ])
+
+    original_unlink = Path.unlink
+
+    def failing_unlink(path, *args, **kwargs):
+        if path == tmp_path / "new.py":
+            raise OSError("Simulated rollback failure.")
+
+        return original_unlink(path, *args, **kwargs)
+
+    original_open = Path.open
+
+    def failing_open(path, mode="r", *args, **kwargs):
+        if path == tmp_path / "second.py" and mode == "x":
+            raise OSError("Simulated creation failure.")
+
+        return original_open(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", failing_unlink)
+    monkeypatch.setattr(Path, "open", failing_open)
+
+    result = executor.execute(approval, tmp_path)
+
+    assert result["results"][0]["status"] == "rollback_failed"
+    assert result["results"][1]["status"] == "failed"
+    assert (tmp_path / "new.py").exists()

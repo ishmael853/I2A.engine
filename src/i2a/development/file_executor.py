@@ -284,6 +284,15 @@ class FileChangeExecutor:
                     if result["status"] == "success":
                         result["status"] = "rolled_back"
 
+                for rollback_error in rollback_errors:
+                    for result in results:
+                        if (
+                            result["file_path"] == rollback_error["file_path"]
+                            and result["status"] == "rolled_back"
+                        ):
+                            result["status"] = "rollback_failed"
+                            break
+
                 results.append({
                     "file_path": change.file_path,
                     "operation": change.operation,
@@ -299,7 +308,7 @@ class FileChangeExecutor:
                         "error": rollback_error["error"],
                     })
 
-                break
+                    break
 
         return {
             "project_name": approval.proposal.project_name,
