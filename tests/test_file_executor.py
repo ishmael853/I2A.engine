@@ -274,6 +274,46 @@ def test_rejects_corrupted_backup(tmp_path):
 
     assert existing_file.read_text(encoding="utf-8") == "Updated"
 
+def test_rejects_invalid_backup_checksum(tmp_path):
+    executor = FileChangeExecutor()
+
+    existing_file = tmp_path / "main.py"
+    existing_file.write_text("Original", encoding="utf-8")
+
+    backup_file = executor._create_backup(existing_file)
+    checksum_file = executor._checksum_path(backup_file)
+
+    checksum_file.write_text(
+        "not-a-valid-checksum",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(OSError, match="Invalid backup checksum"):
+        executor._restore_backup(existing_file, backup_file)
+
+    assert existing_file.read_text(encoding="utf-8") == "Original"
+
+
+def test_rejects_empty_backup_checksum(tmp_path):
+    executor = FileChangeExecutor()
+
+    existing_file = tmp_path / "main.py"
+    existing_file.write_text("Original", encoding="utf-8")
+
+    backup_file = executor._create_backup(existing_file)
+    checksum_file = executor._checksum_path(backup_file)
+
+    checksum_file.write_text(
+        "",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(OSError, match="Invalid backup checksum"):
+        executor._restore_backup(existing_file, backup_file)
+
+    assert existing_file.read_text(encoding="utf-8") == "Original"
+
+
 def test_rollback_previous_changes_when_later_change_falls(
         tmp_path, monkeypatch
 ):

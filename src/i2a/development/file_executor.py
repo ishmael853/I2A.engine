@@ -104,6 +104,19 @@ class FileChangeExecutor:
             encoding="utf-8"
         ).strip()
 
+        if len(expected_checksum) != 64:
+            raise OSError(
+                f"Invalid backup checksum: {checksum_path}"
+            )
+
+        if any(
+            character not in "0123456789abcdef"
+            for character in expected_checksum.lower()
+        ):
+            raise OSError(
+                f"Invalid backup checksum: {checksum_path}"
+            )
+
         actual_checksum = self._calculate_checksum(backup_path)
 
         if actual_checksum != expected_checksum:
