@@ -526,3 +526,22 @@ def test_reject_backup_cleanup(
 
     with pytest.raises(PermissionError):
         workflow.execute_backup_cleanup()
+
+def test_get_backup_health_returns_health_reports(
+        workspace: Path,
+        plan: dict,
+        proposal: DevelopmentProposal,
+) -> None:
+    workflow, _, _, _, _ = create_workflow(plan, proposal)
+
+    workflow.prepare("Build the demo application.", workspace)
+
+    result = workflow.get_backup_health()
+
+    assert result["workspace"] == str(workspace.resolve())
+    assert result["total_backups"] == 0
+    assert result["valid_backups"] == 0
+    assert result["invalid_backups"] == 0
+    assert result["healthy"] is True
+
+    

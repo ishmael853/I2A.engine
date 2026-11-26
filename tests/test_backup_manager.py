@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from i2a.development.backup_manager import BackupManager
+from i2a.development.backup_health import BackupHealthReport
 
 def test_initializes_with_valid_workspace(tmp_path: Path) -> None:
     manager = BackupManager(tmp_path)
@@ -187,5 +188,87 @@ def test_ignores_symbolic_link_backups(tmp_path: Path) -> None:
     manager = BackupManager(tmp_path)
 
     assert manager.list_backups() == [
-        Path("real.py..i2a-backup")
+        Path("real.py.i2a-backup")
     ]
+
+def test_creates_healthy_backup_report(tmp_path: Path) -> None:
+    backup = tmp_path / "example.py.i2a-backup"
+    content = "original content"
+    backup.write_text(content, encoding="utf-8")
+
+    checksum = hashlib.sha256(
+        content.encode("utf-8")
+    ).hexdigest()
+
+    checksum_path = backup.with_name(
+        f"{backup.name}.sha256"
+    )
+    checksum_path.write_text(checksum, encoding="utf-8")
+
+    manager = BackupManager(tmp_path)
+
+    report = manager.create_health_report()
+
+    assert isinstance(report, BackupHealthReport)
+    assert report.total_backups == 1
+    assert report.valid_backups == 1
+    assert report.invalid_backups == 0
+    assert report.healthy is True
+
+def test_creates_unhealthy_backup_report(tmp_path: Path) -> None:
+    backup = tmp_path / "example.py.i2a-backup"
+    backup.write_text("modified content", encoding="utf-8")
+
+    original_checksum = hashlib.sha256(
+        b"original content"
+    ).hexdigest()
+
+    checksum_path = backup.with_name(
+        f"{backup.name}.sha256"
+    )
+    checksum_path.write_text(
+        original_checksum,
+        encoding="utf-8",
+    )
+
+    manager = BackupManager(tmp_path)
+
+    report = manager.create_health_report()
+
+    assert report.total_backups == 1
+    assert report.valid_backups == 0
+    assert report.invalid_backups == 1
+    assert report.healthy is False
+
+def test_health_report_detects_missing_checksums(
+        tmp_path: Path,
+) -> None:
+    backup = tmp_path / "example.py.i2a-backup"
+    backup.write_text("original content", encoding="utf-8")
+
+    manager = BackupManager(tmp_path)
+
+    report = manager.create_health_report()
+
+    assert report.total_backups == 1
+    assert report.invalid_backups == 1
+    assert report.backups_without_checksums == [
+        "example.py.i2a-backup"
+    ]
+    assert report.healthy is False
+
+def test_health_report_detects_orphaned_checksums(
+        tmp_path: Path,
+) -> None:
+    checksum = tmp_path / "missing.py.i2a-backup.sha256"
+    checksum.write_text("some-checksum", encoding="utf-8")
+
+    manager = BackupManager(tmp_path)
+
+    report = manager.create_health_report()
+
+    assert report.total_backups == 0
+    assert report.checksums_without_backups == [
+        "missing.py.i2a-backup.sha256"
+    ]
+    assert report.healthy is False

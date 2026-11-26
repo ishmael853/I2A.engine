@@ -129,6 +129,18 @@ class DevelopmentWorkflow:
             "orphaned_files": manager.find_orphaned_files(),
         }
 
+    def get_backup_health(self) -> dict:
+        """Return a summary of backup health."""
+
+        if self.workspace_path is None:
+            raise RuntimeError(
+                "No workspace is associated with the workflow."
+            )
+
+        manager = BackupManager(self.workspace_path)
+
+        return manager.create_health_report().to_dict()
+
     def prepare_backup_cleanup(self) -> dict:
         """Prepare a backup proposal for independent approval."""
 

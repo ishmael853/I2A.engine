@@ -1,6 +1,8 @@
 import hashlib
 from pathlib import Path
 
+from i2a.development.backup_health import BackupHealthReport
+
 
 class BackupManager:
     """Manages I2A development backup files."""
@@ -211,4 +213,39 @@ class BackupManager:
 
         return orphaned
 
-    
+    def create_health_report(self) -> BackupHealthReport:
+        """Create a summary of backup health."""
+
+        inspections = self.inspect_backups()
+        orphaned_files = self.find_orphaned_files()
+
+        valid_backups = sum(
+            item["status"] == "valid"
+            for item in inspections
+        )
+
+        invalid_backups = sum(
+            item["status"] == "invalid"
+            for item in inspections
+        )
+
+        backups_without_checksums = [
+            item["path"]
+            for item in orphaned_files
+            if item["type"] == "backup_without_checksum"
+        ]
+
+        checksums_without_backups = [
+            item["path"]
+            for item in orphaned_files
+            if item["type"] == "checksum_without_backup"
+        ]
+
+        return BackupHealthReport(
+            workspace=str(self.workspace),
+            total_backups=len(inspections),
+            valid_backups=valid_backups,
+            invalid_backups=invalid_backups,
+            backups_without_checksums=backups_without_checksums,
+            checksums_without_backups=checksums_without_backups,
+        )
