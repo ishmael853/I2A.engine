@@ -3,12 +3,9 @@ from pathlib import Path
 import pytest
 
 from i2a.development.approval import ProposalApproval
-from i2a.development.proposal import (
-    DevelopmentProposal,
-    FileChange,
-)
+from i2a.development.backup_cleanup import BackupCleanupApproval
+from i2a.development.proposal import DevelopmentProposal, FileChange
 from i2a.development.workflow import DevelopmentWorkflow
-
 
 class FakePlanner:
     def __init__(self, plan: dict) -> None:
@@ -459,3 +456,73 @@ def test_execute_does_not_mark_rolled_back_execution_as_completed(
 
     assert len(result["execution"]["results"]) == 2
     assert workflow.execution_completed is False
+
+def test_inspect_backups_returns_integrity_and_orphaned_files(
+    workspace: Path,
+    plan: dict,
+    proposal: DevelopmentProposal,
+) -> None:
+    workflow, _, _, _, _ = create_workflow(plan, proposal)
+
+    workflow.prepare("BUild the demo application.", workspace)
+
+    result = workflow.inspect_backups()
+
+    assert result == {
+        "backups": [],
+        "orphaned_files": [],
+    }
+
+def test_prepare_backup_cleanup_creates_pending_approval(
+        workspace: Path,
+        plan: dict,
+        proposal: DevelopmentProposal,
+) -> None:
+    workflow, _, _, _, _ = create_workflow(plan, proposal)
+
+    workflow.prepare("Build the demo application.", workspace)
+
+    result = workflow.prepare_backup_cleanup()
+
+    assert result["status"] == BackupCleanupApproval.PENDING
+    assert result["proposal"]["workspace"] == str(workspace.resolve())
+    assert result["proposal"]["files"] == []
+    assert workflow.pending_backup_cleanup is not None
+
+def test_backup_cleanup_requires_independent_approval(
+        workspace: Path,
+        plan: dict,
+        proposal: DevelopmentProposal,
+) -> None:
+    workflow, _, _, _, _ = create_workflow(plan, proposal)
+
+    workflow.prepare("Build the demo application.", workspace)
+    workflow.prepare_backup_cleanup()
+
+    assert workflow.pending_backup_cleanup is not None
+    assert workflow.pending_backup_cleanup.status == BackupCleanupApproval.PENDING
+
+    with pytest.raises(PermissionError):
+        workflow.execute_backup_cleanup()
+
+    result = workflow.approve_backup_cleanup()
+
+    assert result["status"] == BackupCleanupApproval.APPROVED
+    assert workflow.pending_backup_cleanup.status == BackupCleanupApproval.APPROVED
+
+def test_reject_backup_cleanup(
+        workspace: Path,
+        plan: dict,
+        proposal: DevelopmentProposal,
+) -> None:
+    workflow, _, _, _, _ = create_workflow(plan, proposal)
+
+    workflow.prepare("Build the demo application.", workspace)
+    workflow.prepare_backup_cleanup()
+
+    result = workflow.reject_backup_cleanup()
+
+    assert result["status"] == BackupCleanupApproval.REJECTED
+
+    with pytest.raises(PermissionError):
+        workflow.execute_backup_cleanup()

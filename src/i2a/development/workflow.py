@@ -8,6 +8,14 @@ from i2a.development.proposal_validator import ProposalValidator
 from i2a.development.preview import FileChangePreview
 from i2a.development.approval import ProposalApproval
 from i2a.development.file_executor import FileChangeExecutor
+from i2a.development.backup_manager import BackupManager
+from i2a.development.backup_cleanup import (
+    BackupCleanupManager,
+    BackupCleanupApproval,
+)
+from i2a.development.backup_cleanup_executor import (
+    BackupCleanupExecutor,
+)
 
 class DevelopmentWorkflow:
     """Coordinates the complete AI-assisted development workflow."""
@@ -45,6 +53,8 @@ class DevelopmentWorkflow:
         self.workspace_path: Path | None = None
         self.preview: dict | None = None
         self.execution_completed = False
+        self.pending_backup_cleanup: BackupCleanupApproval | None = None
+        self.backup_cleanup_completed = False
 
     def prepare(
             self,
@@ -74,6 +84,8 @@ class DevelopmentWorkflow:
         self.workspace_path = None
         self.preview = None
         self.execution_completed = False
+        self.pending_backup_cleanup = None
+        self.backup_cleanup_completed = False
 
         plan = self.planner.create_plan(
             instruction,
@@ -101,6 +113,64 @@ class DevelopmentWorkflow:
             "proposal": proposal.to_dict(),
             "preview": preview,
         }
+
+    def inspect_backups(self) -> dict:
+        """Inspect backup integrity and identify orphaned files."""
+
+        if self.workspace_path is None:
+            raise RuntimeError(
+                "No workspace is associated with the workflow"
+            )
+
+        manager = BackupManager(self.workspace_path)
+
+        return {
+            "backups": manager.inspect_backups(),
+            "orphaned_files": manager.find_orphaned_files(),
+        }
+
+    def prepare_backup_cleanup(self) -> dict:
+        """Prepare a backup proposal for independent approval."""
+
+        if self.workspace_path is None:
+            raise RuntimeError(
+                "No workspace is associated with the workflow."
+            )
+
+        manager = BackupCleanupManager(self.workspace_path)
+        proposal = manager.create_proposal()
+
+        approval = BackupCleanupApproval(proposal)
+
+        self.pending_backup_cleanup = approval
+        self.backup_cleanup_completed = False
+
+        return approval.to_dict()
+
+    def approve_backup_cleanup(self) -> dict:
+        """Approve the pending backup cleanup proposal."""
+
+        if self.pending_backup_cleanup is None:
+            raise RuntimeError(
+                "There is no pending backup cleanup proposal."
+            )
+
+        self.pending_backup_cleanup.approve()
+
+        return self.pending_backup_cleanup.to_dict()
+
+    def reject_backup_cleanup(self) -> dict:
+        """Reject the pending backup cleanup proposal."""
+
+        if self.pending_backup_cleanup is None:
+            raise ValueError(
+                "There is no pending backup cleanup proposal."
+            )
+
+        self.pending_backup_cleanup.reject()
+
+        return self.pending_backup_cleanup.to_dict()
+
 
     def approve(self) -> dict:
         """Approve the pending development proposal."""
@@ -185,6 +255,48 @@ class DevelopmentWorkflow:
                         f"Workspace changed after preview: "
                         f"{change.file_path} was modified."
                     )
+
+    def execute_backup_cleanup(self) -> dict:
+        """Execute the approved backup cleanup proposal."""
+
+        if self.pending_backup_cleanup is None:
+            raise RuntimeError(
+                "There is no backup cleanup proposal to execute."
+            )
+
+        if self.backup_cleanup_completed:
+            raise RuntimeError(
+                "The backup cleanup proposal has already been executed."
+            )
+
+        if (
+            self.pending_backup_cleanup.status
+            != BackupCleanupApproval.APPROVED
+        ):
+            raise PermissionError(
+                "The backup cleanup proposal has not been approved."
+            )
+
+        if self.workspace_path is None:
+            raise RuntimeError(
+                "No workspace is associated with the workflow."
+            )
+
+        executor = BackupCleanupExecutor(self.workspace_path)
+
+        result = executor.execute(
+            self.pending_backup_cleanup
+        )
+
+        self.backup_cleanup_completed = (
+            bool(result.get("successful"))
+            and not result.get("failed")
+        )
+
+        return {
+            "approval_status": self.pending_backup_cleanup.status,
+            "cleanup": result,
+        }
 
     
     def execute(self) ->  dict:
