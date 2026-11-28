@@ -1,4 +1,6 @@
 import hashlib
+import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -272,3 +274,95 @@ def test_health_report_detects_orphaned_checksums(
         "missing.py.i2a-backup.sha256"
     ]
     assert report.healthy is False
+
+def test_get_backup_ages_returns_valid_age(
+        tmp_path: Path,
+) -> None:
+    backup = tmp_path / "example.py.i2a-backup"
+    backup.write_text("original content", encoding="utf-8")
+
+    metadata = {
+        "created_at": (
+            datetime.now(timezone.utc) - timedelta(days=2)
+        ).isoformat()
+    }
+
+    metadata_path = backup.with_name(
+        f"{backup.name}.metadata.json"
+    )
+    metadata_path.write_text(
+        json.dumps(metadata),
+        encoding="utf-8",
+    )
+
+    manager = BackupManager(tmp_path)
+
+    results = manager.get_backup_ages()
+
+    assert len(results) == 1
+    assert results[0]["status"] == "valid"
+    assert results[0]["age_seconds"] >= 2 * 24 * 60 * 60
+
+def test_get_backup_ages_detects_missing_metadata(
+        tmp_path: Path,
+) -> None:
+    backup = tmp_path / "example.py.i2a-backup"
+    backup.write_text("original content", encoding="utf-8")
+
+    manager = BackupManager(tmp_path)
+
+    results = manager.get_backup_ages()
+
+    assert len(results) == 1
+    assert results[0]["status"] == "missing_metadata"
+
+def test_finds_expired_backups(tmp_path: Path) -> None:
+    backup = tmp_path / "old.py.i2a-backup"
+    backup.write_text("old content", encoding="utf-8")
+
+    metadata = {
+        "created_at": (
+            datetime.now(timezone.utc) - timedelta(days=35)
+        ).isoformat()
+    }
+
+    metadata_path = backup.with_name(
+        f"{backup.name}.metadata.json"
+    )
+    metadata_path.write_text(
+        json.dumps(metadata),
+        encoding="utf-8",
+    )
+
+    manager = BackupManager(tmp_path)
+
+    expired = manager.find_expired_backup(max_age_days=30)
+
+    assert len(expired) == 1
+    assert expired[0]["backup"] == "old.py.i2a-backup"
+
+def test_ignores_backups_within_retention_period(
+        tmp_path: Path,
+) -> None:
+    backup = tmp_path / "recent.py.i2a-backup"
+    backup.write_text("recent content", encoding="utf-8")
+
+    metadata = {
+        "created_at": (
+            datetime.now(timezone.utc) - timedelta(days=5)
+        ).isoformat()
+    }
+
+    metadata_path = backup.with_name(
+        f"{backup.name}.metadata.json"
+    )
+    metadata_path.write_text(
+        json.dumps(metadata),
+        encoding="utf-8",
+    )
+
+    manager = BackupManager(tmp_path)
+
+    expired = manager.find_expired_backup(max_age_days=30)
+
+    assert expired == []

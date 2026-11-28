@@ -1,8 +1,9 @@
 import hashlib
+import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 from i2a.development.backup_health import BackupHealthReport
-
 
 class BackupManager:
     """Manages I2A development backup files."""
@@ -212,6 +213,108 @@ class BackupManager:
                 })
 
         return orphaned
+
+    def get_backup_ages(self) -> list[dict]:
+        """Return the age and creation timestamp of each backup."""
+
+        now = datetime.now(timezone.utc)
+        results = []
+
+        for backup_path in self.list_backups():
+            absolute_backup_path = self._resolve_path(backup_path)
+
+            metadata_path = absolute_backup_path.with_name(
+                f"{absolute_backup_path.name}.metadata.json"
+            )
+
+            if metadata_path.is_symlink():
+                results.append({
+                    "backup": str(backup_path),
+                    "status": "invalid",
+                    "error": "Symbolic link metadata is not allowed.",
+                })
+                continue
+
+            if not metadata_path.is_file():
+                results.append({
+                    "backup": str(backup_path),
+                    "status": "missing_metadata",
+                })
+                continue
+
+            try:
+                metadata = json.loads(
+                    metadata_path.read_text(encoding="utf-8")
+                )
+
+                created_at = datetime.fromisoformat(
+                    metadata["created_at"]
+                )
+
+                if created_at.tzinfo is None:
+                    raise ValueError(
+                        "Backup creation timestamp must include a timezone."
+                    )
+
+                age_seconds = (
+                    now - created_at.astimezone(timezone.utc)
+                ).total_seconds()
+
+                if age_seconds < 0:
+                    raise ValueError(
+                        "Backup creation timestamp is in the future."
+                    )
+
+                results.append({
+                    "backup": str(backup_path),
+                    "status": "valid",
+                    "created_at": created_at.isoformat(),
+                    "age_seconds": age_seconds,
+                })
+
+            except (
+                OSError,
+                ValueError,
+                TypeError,
+                KeyError,
+            ) as error:
+                results.append({
+                    "backup": str(backup_path),
+                    "status": "invalid",
+                    "error": str(error),
+                })
+
+        return results
+
+    def find_expired_backup(
+            self,
+            max_age_days: int,
+    ) -> list[dict]:
+        """Find backups that exceed the configured retention period."""
+
+        if isinstance(max_age_days, bool) or not isinstance(
+            max_age_days, int
+        ):
+            raise TypeError(
+                "Maximum backup age must be an integer."
+            )
+
+        if max_age_days < 1:
+            raise ValueError(
+                "Maximum backup age must be atleast one day."
+            )
+
+        expired = []
+        maximum_age_seconds = max_age_days * 24 * 60 * 60
+
+        for item in self.get_backup_ages():
+            if item["status"] != "valid":
+                continue
+
+            if item["age_seconds"] > maximum_age_seconds:
+                expired.append(item)
+
+        return expired
 
     def create_health_report(self) -> BackupHealthReport:
         """Create a summary of backup health."""

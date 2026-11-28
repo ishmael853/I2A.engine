@@ -2,6 +2,8 @@ import hashlib
 import os
 import shutil
 import tempfile
+import json
+from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from i2a.development.approval import ProposalApproval
@@ -126,13 +128,17 @@ class FileChangeExecutor:
 
 
     def _create_backup(self, target: Path) -> Path:
-        """Create a backup and store its SHA-256 checksum."""
+        """Create a backup and store its checksum and creation time."""
 
         backup_path = target.with_name(
             f"{target.name}.i2a-backup"
         )
 
         checksum_path = self._checksum_path(backup_path)
+
+        metadata_path = backup_path.with_name(
+            f"{backup_path.name}.metadata.json"
+        )
 
         if backup_path.exists():
             raise FileExistsError(
@@ -144,17 +150,34 @@ class FileChangeExecutor:
                 f"Backup checksum already exists: {checksum_path}"
             )
 
+        if metadata_path.exists():
+            raise FileExistsError(
+                f"Backup metadata already exists: {metadata_path}"
+            )
+
         shutil.copy2(target, backup_path)
 
         try:
             checksum = self._calculate_checksum(backup_path)
+
             checksum_path.write_text(
                 checksum,
                 encoding="utf-8",
             )
+
+            metadata = {
+                "created_at": datetime.now(timezone.utc).isoformat()
+            }
+
+            metadata_path.write_text(
+                json.dumps(metadata, indent=4),
+                encoding="utf-8",
+            )
+
         except OSError:
             backup_path.unlink(missing_ok=True)
             checksum_path.unlink(missing_ok=True)
+            metadata_path.unlink(missing_ok=True)
             raise
 
         return backup_path
